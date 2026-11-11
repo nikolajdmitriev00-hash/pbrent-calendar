@@ -105,7 +105,8 @@
 (function () {
   "use strict";
   var tg = window.Telegram && Telegram.WebApp;
-  var inTg = !!(tg && tg.initData);
+  // Открыли из Telegram? initData при запуске с кнопки внизу чата пустой — смотрим на платформу
+  var inTg = !!(tg && tg.platform && tg.platform !== "unknown");
   if (tg) { tg.ready(); tg.expand(); }
 
   var q = new URLSearchParams(location.search);
@@ -128,6 +129,7 @@
   var today = new Date(); today.setHours(0, 0, 0, 0);
   var a = parse(q.get("a")), b = parse(q.get("b"));
   if (a && b && b <= a) b = null;
+  if (a && a < today && mode !== "days") { a = null; b = null; }   // прошедшая дата — выбирают заново
   var marked = {};
   (q.get("d") || "").split(",").forEach(function (s) { if (parse(s)) marked[s] = true; });
   var base = a || parse(q.get("v")) || today;
