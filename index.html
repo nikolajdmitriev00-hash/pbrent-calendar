@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Календарь</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<!--
+  Календарь для бота RentCRM (PB-rent). Одна страница без данных о клиентах:
+  что показать — берёт из адреса (?m=…&a=…), выбор отдаёт боту через Telegram.WebApp.sendData.
+  Режимы: m=range — мероприятие (период + время начала и окончания),
+          m=single — монтаж/демонтаж (день + время),
+          m=days — выходные монтажника (отметить несколько дней).
+-->
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8e8e93);
+    --accent: var(--tg-theme-button-color, #2f7cf6);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --card: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --red: var(--tg-theme-destructive-text-color, #e5484d);
+    --soft: color-mix(in srgb, var(--accent) 16%, transparent);
+    --row: 40px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body { padding: 12px 14px 90px; user-select: none; -webkit-user-select: none; }
+  h1 { font-size: 17px; font-weight: 600; margin: 2px 0 10px; }
+  .card { background: var(--card); border-radius: 14px; padding: 10px 10px 12px; margin-bottom: 12px; }
+  .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .head b { font-size: 17px; text-transform: capitalize; }
+  .nav { width: 40px; height: 36px; border: 0; border-radius: 10px; background: transparent; color: var(--accent);
+    font-size: 22px; cursor: pointer; }
+  .nav:disabled { color: var(--hint); opacity: .4; }
+  .grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px 0; touch-action: pan-y; }
+  .wd { text-align: center; font-size: 12px; color: var(--hint); padding: 2px 0 6px; }
+  .wd.we { color: var(--red); }
+  .day { position: relative; height: 42px; display: flex; align-items: center; justify-content: center;
+    font-size: 16px; cursor: pointer; }
+  .day span { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .day.we span { color: var(--red); }
+  .day.past span { color: var(--hint); opacity: .45; }
+  .day.today span { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .day.in::before { content: ""; position: absolute; inset: 2px 0; background: var(--soft); }
+  .day.in.first::before { left: 50%; } .day.in.last::before { right: 50%; }
+  .day.sel span { background: var(--accent); color: var(--accent-text) !important; opacity: 1; font-weight: 600; }
+  .day.off span { background: var(--red); color: #fff !important; font-weight: 600; }
+  .empty { height: 42px; }
+  .summary { color: var(--hint); font-size: 14px; margin: 2px 2px 10px; min-height: 19px; }
+  .summary b { color: var(--text); }
+  .times { display: flex; gap: 10px; }
+  .times > div { flex: 1; }
+  .label { font-size: 13px; color: var(--hint); margin: 0 0 6px 4px; }
+  .wheel { position: relative; display: flex; justify-content: center; align-items: center; height: calc(var(--row) * 5);
+    background: var(--bg); border-radius: 12px; overflow: hidden; }
+  .wheel::before { content: ""; position: absolute; left: 6px; right: 6px; top: calc(var(--row) * 2); height: var(--row);
+    background: var(--soft); border-radius: 9px; pointer-events: none; }
+  .wheel::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(var(--bg), transparent 38%, transparent 62%, var(--bg)); }
+  .col { height: 100%; width: 54px; overflow-y: scroll; scroll-snap-type: y mandatory; scrollbar-width: none;
+    overscroll-behavior: contain; }
+  .col::-webkit-scrollbar { display: none; }
+  .col div { height: var(--row); line-height: var(--row); text-align: center; font-size: 22px; scroll-snap-align: center;
+    font-variant-numeric: tabular-nums; }
+  .colon { font-size: 22px; font-weight: 600; padding: 0 2px; z-index: 1; }
+  .wheel.off .col, .wheel.off .colon { opacity: .25; pointer-events: none; }
+  .switch { display: flex; align-items: center; gap: 8px; margin: 8px 4px 0; font-size: 14px; color: var(--hint); cursor: pointer; }
+  .switch input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .note { font-size: 13px; color: var(--hint); margin: 8px 4px 0; }
+  #done { display: none; position: fixed; left: 14px; right: 14px; bottom: 14px; height: 50px; border: 0; border-radius: 12px;
+    background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; }
+  #done:disabled { opacity: .45; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<h1 id="title">Выберите дату</h1>
+
+<div class="card">
+  <div class="head">
+    <button class="nav" id="prev" aria-label="Предыдущий месяц">‹</button>
+    <b id="month"></b>
+    <button class="nav" id="next" aria-label="Следующий месяц">›</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+<div class="summary" id="summary"></div>
+
+<div class="card" id="timeCard">
+  <div class="times">
+    <div id="startBox"><div class="label" id="startLabel">Начало</div><div class="wheel" id="w1"></div></div>
+    <div id="endBox"><div class="label">Окончание</div><div class="wheel" id="w2"></div></div>
+  </div>
+  <label class="switch" id="noTimeSw"><input type="checkbox" id="noTime"> <span id="noTimeText">Время пока неизвестно</span></label>
+  <label class="switch" id="noEndSw"><input type="checkbox" id="noEnd"> Без времени окончания</label>
+  <div class="note" id="note"></div>
+</div>
+
+<button id="done"></button>
+
+<script>
+(function () {
+  "use strict";
+  var tg = window.Telegram && Telegram.WebApp;
+  var inTg = !!(tg && tg.initData);
+  if (tg) { tg.ready(); tg.expand(); }
+
+  var q = new URLSearchParams(location.search);
+  var mode = ({range: 1, single: 1, days: 1})[q.get("m")] ? q.get("m") : "range";
+  var key = (q.get("k") || "").slice(0, 40);
+  var title = q.get("h");
+  var MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
+  var MONTHS_G = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+  var WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function iso(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parse(s) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || "");
+    return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+  }
+  function hm(s) { var m = /^(\d{1,2}):?(\d{2})$/.exec(s || ""); return m && +m[1] < 24 && +m[2] < 60 ? [+m[1], +m[2]] : null; }
+  function human(d) { return d.getDate() + " " + MONTHS_G[d.getMonth()]; }
+
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var a = parse(q.get("a")), b = parse(q.get("b"));
+  if (a && b && b <= a) b = null;
+  var marked = {};
+  (q.get("d") || "").split(",").forEach(function (s) { if (parse(s)) marked[s] = true; });
+  var base = a || parse(q.get("v")) || today;
+  if (base < today) base = today;
+  var view = new Date(base.getFullYear(), base.getMonth(), 1);
+
+  document.getElementById("title").textContent = title ||
+    ({range: "Когда мероприятие?", single: "Выберите день и время", days: "Когда вы не можете работать?"})[mode];
+
+  // ---------- календарь ----------
+  var grid = document.getElementById("grid");
+  function render() {
+    document.getElementById("month").textContent = MONTHS[view.getMonth()] + " " + view.getFullYear();
+    var first = new Date(today.getFullYear(), today.getMonth(), 1);
+    document.getElementById("prev").disabled = view <= first;
+    var html = WD.map(function (w, i) { return '<div class="wd' + (i > 4 ? " we" : "") + '">' + w + "</div>"; }).join("");
+    var shift = (view.getDay() + 6) % 7;
+    for (var i = 0; i < shift; i++) html += '<div class="empty"></div>';
+    var days = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+    for (var n = 1; n <= days; n++) {
+      var d = new Date(view.getFullYear(), view.getMonth(), n), s = iso(d), c = ["day"], col = (shift + n - 1) % 7;
+      if (col > 4) c.push("we");
+      if (d < today) c.push("past");
+      if (+d === +today) c.push("today");
+      if (mode === "days") { if (marked[s]) c.push("off"); }
+      else {
+        if ((a && +d === +a) || (b && +d === +b)) c.push("sel");
+        if (a && b && d >= a && d <= b) {
+          c.push("in");
+          if (+d === +a) c.push("first");
+          if (+d === +b) c.push("last");
+        }
+      }
+      html += '<div class="' + c.join(" ") + '" data-d="' + s + '"><span>' + n + "</span></div>";
+    }
+    grid.innerHTML = html;
+    summary();
+  }
+  function move(k) {
+    var nv = new Date(view.getFullYear(), view.getMonth() + k, 1);
+    if (nv < new Date(today.getFullYear(), today.getMonth(), 1)) return;
+    view = nv; render();
+  }
+  document.getElementById("prev").onclick = function () { move(-1); };
+  document.getElementById("next").onclick = function () { move(1); };
+  var sx = null, sy = null;
+  grid.addEventListener("touchstart", function (e) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, {passive: true});
+  grid.addEventListener("touchend", function (e) {
+    if (sx === null) return;
+    var dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) move(dx < 0 ? 1 : -1);
+    sx = null;
+  });
+  grid.addEventListener("click", function (e) {
+    var el = e.target.closest(".day");
+    if (!el || el.classList.contains("past")) return;
+    var d = parse(el.dataset.d), s = el.dataset.d;
+    if (mode === "days") { if (marked[s]) delete marked[s]; else marked[s] = true; }
+    else if (mode === "single") { a = d; }
+    else if (a && +d === +a) { a = b; b = null; }          // повторное нажатие — снять
+    else if (b && +d === +b) { b = null; }
+    else if (!a || b || d < a) { a = d; b = null; }
+    else { b = d; }
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    render(); update();
+  });
+
+  // ---------- колесо времени (по кругу, часы и минуты отдельно) ----------
+  var REP = 9;   // список повторяется 9 раз, крутим в середине и незаметно возвращаемся — получается «бесконечно»
+  function Wheel(box, value, onChange) {
+    var self = this;
+    this.cols = [[24, 1], [12, 5]].map(function (spec, idx) {
+      var n = spec[0], step = spec[1], col = document.createElement("div");
+      col.className = "col";
+      var html = "";
+      for (var r = 0; r < REP; r++) for (var i = 0; i < n; i++) html += "<div>" + pad(i * step) + "</div>";
+      col.innerHTML = html;
+      if (idx === 1) { var c = document.createElement("div"); c.className = "colon"; c.textContent = ":"; box.appendChild(c); }
+      box.appendChild(col);
+      var o = {el: col, n: n, step: step, idx: 0, timer: null};
+      col.addEventListener("scroll", function () {
+        clearTimeout(o.timer);
+        var i = (Math.round(col.scrollTop / rowH()) + 2) % n;   // в центре — третья видимая строка
+        if (i !== o.idx) { o.idx = i; if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); onChange(); }
+        o.timer = setTimeout(function () { self.recenter(o); }, 140);
+      }, {passive: true});
+      return o;
+    });
+    this.set(value);
+  }
+  function rowH() { return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")) || 40; }
+  Wheel.prototype.recenter = function (o) {
+    var i = (Math.round(o.el.scrollTop / rowH()) + 2) % o.n;
+    var mid = (Math.floor(REP / 2) * o.n + i - 2) * rowH();
+    if (Math.abs(o.el.scrollTop - mid) > 1) o.el.scrollTop = mid;
+  };
+  Wheel.prototype.set = function (v) {
+    var h = v[0], m = Math.round(v[1] / 5) % 12;
+    var self = this;
+    [h, m].forEach(function (i, k) {
+      var o = self.cols[k]; o.idx = i;
+      o.el.scrollTop = (Math.floor(REP / 2) * o.n + i - 2) * rowH();
+    });
+  };
+  Wheel.prototype.get = function () { return pad(this.cols[0].idx) + ":" + pad(this.cols[1].idx * 5); };
+
+  var timeCard = document.getElementById("timeCard");
+  var w1, w2, noTime = document.getElementById("noTime"), noEnd = document.getElementById("noEnd");
+  var t1 = hm(q.get("tf")) || hm(q.get("t")) || [mode === "single" ? 10 : 18, 0];
+  var t2 = hm(q.get("tt")) || [(t1[0] + 4) % 24, t1[1]];
+  if (mode === "days") timeCard.classList.add("hidden");
+  else {
+    // время ставим, когда карточка уже видна: иначе высота строк ещё неизвестна
+    requestAnimationFrame(function () {
+      w1 = new Wheel(document.getElementById("w1"), t1, update);
+      if (mode === "range") w2 = new Wheel(document.getElementById("w2"), t2, update);
+      update();
+    });
+    if (mode === "single") {
+      document.getElementById("endBox").classList.add("hidden");
+      document.getElementById("noEndSw").classList.add("hidden");
+      document.getElementById("startLabel").textContent = q.get("l") || "Время";
+      document.getElementById("noTimeText").textContent = "Время уточню позже";
+      if (q.get("night")) document.getElementById("note").textContent = "00:00–05:55 — это ночь после выбранного дня.";
+    }
+    if (q.get("nt") === "1") noTime.checked = true;
+  }
+  noTime.onchange = noEnd.onchange = update;
+
+  // ---------- итог и кнопка ----------
+  function summary() {
+    var el = document.getElementById("summary"), s;
+    if (mode === "days") {
+      var n = Object.keys(marked).filter(function (k) { return parse(k) >= today; }).length;
+      s = n ? "Отмечено дней: <b>" + n + "</b>. Нажмите день ещё раз, чтобы снять." : "Нажмите дни, когда не можете работать.";
+    } else if (!a) s = mode === "range" ? "Нажмите день начала, потом — день окончания (если больше одного дня)." : "Нажмите день.";
+    else s = "<b>" + human(a) + (b ? " — " + human(b) : "") + "</b>" + (mode === "range" && !b ? " · можно выбрать и день окончания" : "");
+    el.innerHTML = s;
+  }
+  var btn = document.getElementById("done");
+  function label() {
+    if (mode === "days") return "Сохранить выходные";
+    if (!a) return mode === "range" ? "Выберите дату" : "Выберите день";
+    var s = pad(a.getDate()) + "." + pad(a.getMonth() + 1) + (b ? "–" + pad(b.getDate()) + "." + pad(b.getMonth() + 1) : "");
+    if (w1 && !noTime.checked) s += ", " + w1.get() + (w2 && !noEnd.checked ? "–" + w2.get() : "");
+    return "Готово — " + s;
+  }
+  function update() {
+    var off = noTime.checked;
+    document.getElementById("w1").classList.toggle("off", off);
+    document.getElementById("w2").classList.toggle("off", off || noEnd.checked);
+    document.getElementById("noEndSw").classList.toggle("hidden", mode !== "range" || off);
+    var ok = mode === "days" || !!a, text = label();
+    if (inTg) {
+      tg.MainButton.setText(text);
+      if (ok) { tg.MainButton.enable(); tg.MainButton.show(); } else { tg.MainButton.disable(); tg.MainButton.show(); }
+    } else { btn.style.display = "block"; btn.textContent = text; btn.disabled = !ok; }
+  }
+  function send() {
+    var out = {k: key};
+    if (mode === "days") {
+      out.d = Object.keys(marked).filter(function (k) { return parse(k) >= today; }).sort().slice(0, 300);
+    } else {
+      if (!a) return;
+      out.a = iso(a);
+      if (mode === "range" && b) out.b = iso(b);
+      if (w1 && !noTime.checked) {
+        if (mode === "range") { out.tf = w1.get(); if (!noEnd.checked) out.tt = w2.get(); }
+        else out.t = w1.get();
+      }
+    }
+    var data = JSON.stringify(out);
+    if (inTg) tg.sendData(data);           // Telegram сам закроет окно и передаст выбор боту
+    else alert("Боту уйдёт: " + data);
+  }
+  if (inTg) tg.MainButton.onClick(send);
+  btn.onclick = send;
+  render(); update();
+})();
+</script>
+</body>
+</html>
